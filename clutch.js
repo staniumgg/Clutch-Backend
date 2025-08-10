@@ -9,6 +9,7 @@ const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 const { spawn } = require('child_process');
 const { ElevenLabsClient } = require('@elevenlabs/elevenlabs-js');
+const { PythonShell } = require('python-shell');
 
 // Set ffmpeg path
 ffmpeg.setFfmpegPath("C:\\Users\\paula\\OneDrive\\Documentos\\StaniuM\\ffmpeg-2025-05-15-git-12b853530a-full_build\\bin\\ffmpeg.exe");
@@ -382,10 +383,192 @@ async function spawnPythonAndAnalyze(audioBuffer, username, userId, timestamp, u
     });
 }
 
+// Función para obtener preferencias del usuario desde DynamoDB
+async function getUserPreferencesFromDB(userId) {
+    return new Promise((resolve) => {
+        const pythonProcess = spawn('python', [
+            'preferences_manager.py', 'get', userId
+        ], { stdio: ['pipe', 'pipe', 'pipe'] });
+
+        let stdoutData = '';
+        let stderrData = '';
+
+        pythonProcess.stdout.on('data', (data) => {
+            stdoutData += data.toString();
+        });
+
+        pythonProcess.stderr.on('data', (data) => {
+            stderrData += data.toString();
+        });
+
+        pythonProcess.on('close', (code) => {
+            try {
+                if (code === 0 && stdoutData.trim()) {
+                    const result = JSON.parse(stdoutData.trim());
+                    resolve(result);
+                } else {
+                    resolve({ success: false, error: 'No preferences found', stderr: stderrData });
+                }
+            } catch (e) {
+                console.error('Error parsing preferences result:', e, stdoutData);
+                resolve({ success: false, error: 'Parse error', stderr: stderrData });
+            }
+        });
+    });
+}
+
+// Función para guardar preferencias del usuario en DynamoDB
+async function saveUserPreferencesToDB(userId, tts_preferences, user_personality_test, profile_id) {
+    return new Promise((resolve) => {
+        const pythonProcess = spawn('python', [
+            'preferences_manager.py', 'save', userId,
+            JSON.stringify(tts_preferences),
+            JSON.stringify(user_personality_test),
+            profile_id || ''
+        ], { stdio: ['pipe', 'pipe', 'pipe'] });
+
+        let stdoutData = '';
+        let stderrData = '';
+
+        pythonProcess.stdout.on('data', (data) => {
+            stdoutData += data.toString();
+        });
+
+        pythonProcess.stderr.on('data', (data) => {
+            stderrData += data.toString();
+        });
+
+        pythonProcess.on('close', (code) => {
+            try {
+                if (code === 0 && stdoutData.trim()) {
+                    const result = JSON.parse(stdoutData.trim());
+                    resolve(result);
+                } else {
+                    resolve({ success: false, error: 'Save failed', stderr: stderrData });
+                }
+            } catch (e) {
+                console.error('Error parsing save result:', e, stdoutData);
+                resolve({ success: false, error: 'Parse error', stderr: stderrData });
+            }
+        });
+    });
+}
+
+// Función para calcular profile_id desde user_personality_test
+function calculateProfileId(answers) {
+    // Preguntas invertidas: 2,4,6,8,10 (índices 1,3,5,7,9)
+    const invert_indices = [1,3,5,7,9];
+    const scores = [];
+    
+    for (let i = 0; i < answers.length; i++) {
+        const val = answers[i];
+        if (invert_indices.includes(i)) {
+            scores.push(6 - val);
+        } else {
+            scores.push(val);
+        }
+    }
+    
+    // Rasgos: E(0,1), A(2,3), N(4,5), C(6,7), O(8,9)
+    const traits = {
+        'E': (scores[0] + scores[1]) / 2,
+        'A': (scores[2] + scores[3]) / 2,
+        'N': (scores[4] + scores[5]) / 2,
+        'C': (scores[6] + scores[7]) / 2,
+        'O': (scores[8] + scores[9]) / 2
+    };
+    
+    function label(val) {
+        if (val >= 4.0) return 'alto';
+        else if (val <= 2.5) return 'bajo';
+        else return 'medio';
+    }
+    
+    const profile_id = Object.entries(traits)
+        .map(([k, v]) => `${k}_${label(v)}`)
+        .join('__');
+    
+    return profile_id;
+}
+
 async function collectUserPreferences(userId, message) {
     try {
         const user = await client.users.fetch(userId);
         const dmChannel = await user.createDM();
+
+        // Primero verificar si el usuario ya tiene preferencias guardadas
+        const existingPreferences = await getUserPreferencesFromDB(userId);
+        
+        if (existingPreferences.success) {
+            // Usuario tiene preferencias previas, preguntar si quiere usarlas
+            const useExistingRow = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('use_existing_yes')
+                        .setLabel('Sí, usar mis preferencias anteriores')
+                        .setStyle('Primary'),
+                    new ButtonBuilder()
+                        .setCustomId('use_existing_no')
+                        .setLabel('No, configurar nuevamente')
+                        .setStyle('Secondary')
+                );
+
+            const existingEmbed = {
+                color: 0x0099ff,
+                title: '🎮 Preferencias Encontradas',
+                description: '¡Encontré tus preferencias anteriores! ¿Quieres usarlas?',
+                fields: [
+                    { 
+                        name: 'Voz ElevenLabs', 
+                        value: existingPreferences.preferences.tts_preferences.elevenlabs_voice || 'No configurada', 
+                        inline: true 
+                    },
+                    { 
+                        name: 'Velocidad TTS', 
+                        value: existingPreferences.preferences.tts_preferences.tts_speed || 'No configurada', 
+                        inline: true 
+                    },
+                    { 
+                        name: 'Perfil de personalidad', 
+                        value: existingPreferences.preferences.profile_id || 'No configurado', 
+                        inline: false 
+                    }
+                ]
+            };
+
+            await dmChannel.send({
+                embeds: [existingEmbed],
+                components: [useExistingRow]
+            });
+
+            const useExistingSelection = await dmChannel.awaitMessageComponent({
+                componentType: ComponentType.Button,
+                time: 120000
+            }).catch(() => null);
+
+            if (useExistingSelection && useExistingSelection.customId === 'use_existing_yes') {
+                await useExistingSelection.deferUpdate();
+                await dmChannel.send({
+                    embeds: [{
+                        color: 0x00ff00,
+                        title: '✅ Usando Preferencias Anteriores',
+                        description: '¡Perfecto! Usaré tus preferencias guardadas para personalizar tu análisis.'
+                    }]
+                });
+                
+                console.log(`🔄 Usuario ${userId} usará preferencias existentes`);
+                return existingPreferences.preferences;
+            } else {
+                await useExistingSelection?.deferUpdate();
+                await dmChannel.send({
+                    embeds: [{
+                        color: 0xffaa00,
+                        title: '🆕 Configurando Nuevas Preferencias',
+                        description: 'Configuremos tus nuevas preferencias paso a paso.'
+                    }]
+                });
+            }
+        }
 
         // --- Personality/Scale Questions ---
         const personalityQuestions = [
@@ -460,7 +643,7 @@ async function collectUserPreferences(userId, message) {
                         components: [buttonRowFinal]
                     });
                 } else {
-                    user_personality_test.push(null);
+                    user_personality_test.push(3); // Valor neutro si no responde
                     answered = true;
                 }
             }
@@ -549,6 +732,18 @@ async function collectUserPreferences(userId, message) {
             await speedSelection.deferUpdate();
         } else {
             tts_preferences.tts_speed = 'Normal'; // Default
+        }        // Calcular profile_id antes de guardar
+        const profile_id = calculateProfileId(user_personality_test);
+        console.log(`🧮 Profile ID calculado: ${profile_id}`);
+
+        // Guardar las nuevas preferencias en DynamoDB
+        console.log(`💾 Guardando preferencias para usuario ${userId}...`);
+        const saveResult = await saveUserPreferencesToDB(userId, tts_preferences, user_personality_test, profile_id);
+        
+        if (saveResult.success) {
+            console.log(`✅ Preferencias guardadas exitosamente para ${userId}`);
+        } else {
+            console.error(`❌ Error guardando preferencias para ${userId}:`, saveResult.error);
         }
 
         // Confirmación final
@@ -560,18 +755,21 @@ async function collectUserPreferences(userId, message) {
                 fields: [
                     { name: 'Voz ElevenLabs', value: tts_preferences.elevenlabs_voice, inline: true },
                     { name: 'Velocidad TTS', value: tts_preferences.tts_speed, inline: true },
+                    { name: 'Perfil de personalidad', value: profile_id, inline: false },
                     { name: 'Respuestas de personalidad', value: user_personality_test.join(', '), inline: false }
                 ]
             }],
             components: []
         });
 
-        // Guardar preferencias
-        await saveUserPreferences(userId, { tts_preferences, user_personality_test });
-        console.log(`🐛 DEBUG: Preferencias finales recolectadas:`, JSON.stringify({ tts_preferences, user_personality_test }, null, 2));
-        return { tts_preferences, user_personality_test };
+        // Debug: log collected preferences before returning
+        console.log(`🐛 DEBUG: Preferencias finales recolectadas:`, JSON.stringify({ tts_preferences, user_personality_test, profile_id }, null, 2));
+        console.log(`🧪 DEBUG: user_personality_test array:`, user_personality_test);
+        
+        return { tts_preferences, user_personality_test, profile_id };
     } catch (error) {
         console.error(`❌ Error recolectando preferencias para ${userId}:`, error);
+        console.error(`❌ Stack trace:`, error.stack);
         return { tts_preferences: { elevenlabs_voice: 'gU0LNdkMOQCOrPrwtbee', tts_speed: 'Normal' }, user_personality_test: [3,3,3,3,3,3,3,3,3,3] };
     }
 }
