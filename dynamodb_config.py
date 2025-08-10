@@ -5,6 +5,7 @@ import os
 import sys
 from typing import Dict
 from dotenv import load_dotenv
+from decimal import Decimal
 
 # Cargar variables de entorno
 load_dotenv()
@@ -50,7 +51,8 @@ def save_analysis_complete(
     coach_audio_data: bytes,
     base_filename: str,
     transcription: str,
-    user_preferences: Dict,
+    tts_preferences: dict,
+    user_personality_test: list,
     wpm: float = 0.0,
     wmp_by_segment: dict = None # Añadir wmp por segmento
 ) -> Dict:
@@ -62,7 +64,9 @@ def save_analysis_complete(
         'analysis_id': "local-" + str(uuid.uuid4()),
         'player_s3_url': '',
         'coach_s3_url': '',
-        'error': ''
+        'error': '',
+        # Echo back for debugging
+        'echo_user_preferences': tts_preferences or {}
     }
 
     # 1. Subir audio del jugador a S3
@@ -110,6 +114,58 @@ def save_analysis_complete(
 
     try:
         table = dynamodb.Table(DYNAMODB_TABLE_NAME)
+        timestamp = datetime.utcnow().isoformat()
+        # Log de preferencias recibidas antes de guardar
+        try:
+            pref_keys = list((tts_preferences or {}).keys())
+            sys.stderr.write(f"🧩 tts_preferences keys: {pref_keys}\n")
+        except Exception:
+            sys.stderr.write("🧩 tts_preferences no es un dict serializable\n")
+
+        # Convertir wpm a Decimal
+        wpm_decimal = Decimal(str(wpm)) if wpm is not None else Decimal('0')
+        # Convertir los valores de wpm_by_segment a Decimal si existen
+        wpm_by_segment_decimal = {}
+        if wmp_by_segment:
+            for k, v in wmp_by_segment.items():
+                try:
+                    wpm_by_segment_decimal[k] = Decimal(str(v))
+                except Exception:
+                    wpm_by_segment_decimal[k] = Decimal('0')
+
+        # Calcular profile_id a partir de user_personality_test
+        def calculate_profile_id(answers):
+            # Preguntas invertidas: 2,4,6,8,10 (índices 1,3,5,7,9)
+            invert_indices = [1,3,5,7,9]
+            scores = []
+            for i, val in enumerate(answers):
+                if i in invert_indices:
+                    scores.append(6 - val if 1 <= val <= 5 else val)
+                else:
+                    scores.append(val)
+            # Rasgos: E(0,1), A(2,3), N(4,5), C(6,7), O(8,9)
+            traits = {
+                'E': (scores[0] + scores[1]) / 2,
+                'A': (scores[2] + scores[3]) / 2,
+                'N': (scores[4] + scores[5]) / 2,
+                'C': (scores[6] + scores[7]) / 2,
+                'O': (scores[8] + scores[9]) / 2
+            }
+            def label(val):
+                if val >= 4.0:
+                    return 'alto'
+                elif val <= 2.5:
+                    return 'bajo'
+                else:
+                    return 'medio'
+            profile_id = '__'.join([f"{k}_{label(v)}" for k,v in traits.items()])
+            return profile_id
+
+        # Si user_personality_test es una lista de 10 elementos, calcula el profile_id
+        profile_id = None
+        if isinstance(user_personality_test, list) and len(user_personality_test) == 10:
+            profile_id = calculate_profile_id(user_personality_test)
+
         item = {
             'id': analysis_id,  # DynamoDB requiere este campo como clave primaria
             'analysis_id': analysis_id,
@@ -118,12 +174,12 @@ def save_analysis_complete(
             'coach_audio_url': coach_s3_url,    # URL del audio del coach
             'analysis_text': analysis_text,
             'transcription': transcription,
-            'user_preferences': user_preferences,
-            'timestamp': datetime.utcnow().isoformat(),
-            'game': user_preferences.get('game', 'N/A'),
-            'coach_type': user_preferences.get('coach_type', 'N/A'),
-            'wmp': int(wpm),  # Guardar WMP como entero
-            'wmp_by_segment': wmp_by_segment if wmp_by_segment else {}
+            'timestamp': timestamp,
+            'tts_preferences': tts_preferences,
+            'user_personality_test': user_personality_test,
+            'profile_id': profile_id,
+            'wpm': wpm_decimal,
+            'wpm_by_segment': wpm_by_segment_decimal,
         }
         table.put_item(Item=item)
         result['success'] = True

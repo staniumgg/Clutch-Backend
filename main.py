@@ -3,8 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from dynamodb_config import save_analysis_complete, get_analyses_by_user
 from s3_config import s3_manager
 import asyncio
+import json
 
 app = FastAPI()
+
+# Configurar límites para archivos grandes
+app.max_request_size = 50 * 1024 * 1024  # 50MB
 
 # Permitir CORS para pruebas desde el origen del frontend
 app.add_middleware(
@@ -24,19 +28,36 @@ async def guardar_analisis(
     user_id: str = Form(...),
     analysis_text: str = Form(...),
     transcription: str = Form(...),
-    game: str = Form(...),
-    coach_type: str = Form(...),
+    tts_preferences: str = Form(...),
+    user_personality_test: str = Form(...),
     player_audio: UploadFile = File(None),
     coach_audio: UploadFile = File(None)
 ):
     print(">>>>> [MAIN] Request received in /guardar-analisis/")
+    print(f"       user_id: {user_id}")
+    print(f"       tts_preferences (raw): {tts_preferences}")
+    print(f"       user_personality_test (raw): {user_personality_test}")
+
+    # Parsear tts_preferences
+    try:
+        tts_prefs = json.loads(tts_preferences) if tts_preferences else {}
+    except Exception as e:
+        print(f"[ERROR] No se pudo parsear tts_preferences: {e}")
+        tts_prefs = {}
+
+    # Parsear user_personality_test
+    try:
+        personality_test = json.loads(user_personality_test) if user_personality_test else []
+    except Exception as e:
+        print(f"[ERROR] No se pudo parsear user_personality_test: {e}")
+        personality_test = []
+
     player_audio_bytes = await player_audio.read() if player_audio else None
     coach_audio_bytes = await coach_audio.read() if coach_audio else None
     print(f">>>>> [MAIN] Player audio read: {len(player_audio_bytes) if player_audio_bytes else 'No'} bytes")
     print(f">>>>> [MAIN] Coach audio read: {len(coach_audio_bytes) if coach_audio_bytes else 'No'} bytes")
-    user_preferences = {"game": game, "coach_type": coach_type}
 
-    # Run the synchronous function in a separate thread
+    # Guardar en DynamoDB
     result = await asyncio.to_thread(
         save_analysis_complete,
         user_id=user_id,
@@ -45,9 +66,14 @@ async def guardar_analisis(
         coach_audio_data=coach_audio_bytes,
         base_filename=player_audio.filename if player_audio else f"analysis_{user_id}_{int(__import__('time').time())}.mp3",
         transcription=transcription,
-        user_preferences=user_preferences
+        tts_preferences=tts_prefs,
+        user_personality_test=personality_test
     )
-    
+
+    # Echo para debug
+    result["echo_tts_preferences"] = tts_prefs
+    result["echo_user_personality_test"] = personality_test
+
     print(">>>>> [MAIN] Analysis saved, returning result.")
     return result
 

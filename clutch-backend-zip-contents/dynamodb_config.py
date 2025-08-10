@@ -62,7 +62,9 @@ def save_analysis_complete(
         'analysis_id': "local-" + str(uuid.uuid4()),
         'player_s3_url': '',
         'coach_s3_url': '',
-        'error': ''
+        'error': '',
+        # Echo back for debugging
+        'echo_user_preferences': user_preferences or {}
     }
 
     # 1. Subir audio del jugador a S3
@@ -110,6 +112,13 @@ def save_analysis_complete(
 
     try:
         table = dynamodb.Table(DYNAMODB_TABLE_NAME)
+        # Log de preferencias recibidas antes de guardar
+        try:
+            pref_keys = list((user_preferences or {}).keys())
+            sys.stderr.write(f"🧩 user_preferences keys: {pref_keys}\n")
+        except Exception:
+            sys.stderr.write("🧩 user_preferences no es un dict serializable\n")
+
         item = {
             'id': analysis_id,  # DynamoDB requiere este campo como clave primaria
             'analysis_id': analysis_id,
@@ -120,10 +129,11 @@ def save_analysis_complete(
             'transcription': transcription,
             'user_preferences': user_preferences,
             'timestamp': datetime.utcnow().isoformat(),
-            'game': user_preferences.get('game', 'N/A'),
-            'coach_type': user_preferences.get('coach_type', 'N/A'),
-            'wmp': int(wpm),  # Guardar WMP como entero
-            'wmp_by_segment': wmp_by_segment if wmp_by_segment else {}
+            'game': (user_preferences or {}).get('game', 'N/A'),
+            'coach_type': (user_preferences or {}).get('coach_type', 'N/A'),
+            # Fix keys: store WPM metrics correctly
+            'wpm': int(wpm) if isinstance(wpm, (int, float)) else 0,
+            'wpm_by_segment': wmp_by_segment if wmp_by_segment else {}
         }
         table.put_item(Item=item)
         result['success'] = True
