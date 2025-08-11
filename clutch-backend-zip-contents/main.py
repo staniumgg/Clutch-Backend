@@ -3,8 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from dynamodb_config import save_analysis_complete, get_analyses_by_user
 from s3_config import s3_manager
 import asyncio
+import json
 
 app = FastAPI()
+
+# Configurar límites para archivos grandes
+app.max_request_size = 50 * 1024 * 1024  # 50MB
 
 # Permitir CORS para pruebas desde el origen del frontend
 app.add_middleware(
@@ -26,15 +30,55 @@ async def guardar_analisis(
     transcription: str = Form(...),
     game: str = Form(...),
     coach_type: str = Form(...),
+    personality: str = Form(...),
+    elevenlabs_voice: str = Form(...),
+    tts_speed: str = Form(...),
+    personality_scales: str = Form(...),  # Recibir como JSON string
     player_audio: UploadFile = File(None),
     coach_audio: UploadFile = File(None)
 ):
     print(">>>>> [MAIN] Request received in /guardar-analisis/")
+    print(f">>>>> [MAIN] Datos recibidos:")
+    print(f"       user_id: {user_id}")
+    print(f"       game: {game}")
+    print(f"       coach_type: {coach_type}")
+    print(f"       personality: {personality}")
+    print(f"       elevenlabs_voice: {elevenlabs_voice}")
+    print(f"       tts_speed: {tts_speed}")
+    print(f"       personality_scales (raw): {personality_scales}")
+    
     player_audio_bytes = await player_audio.read() if player_audio else None
     coach_audio_bytes = await coach_audio.read() if coach_audio else None
     print(f">>>>> [MAIN] Player audio read: {len(player_audio_bytes) if player_audio_bytes else 'No'} bytes")
     print(f">>>>> [MAIN] Coach audio read: {len(coach_audio_bytes) if coach_audio_bytes else 'No'} bytes")
-    user_preferences = {"game": game, "coach_type": coach_type}
+    
+    # Parsear personality_scales de forma segura como lista
+    scales_list = []
+    try:
+        parsed = json.loads(personality_scales) if personality_scales else []
+        if isinstance(parsed, list):
+            scales_list = parsed
+        else:
+            print(f">>>>> [MAIN] personality_scales no es lista, tipo recibido: {type(parsed)}. Usando [].")
+    except json.JSONDecodeError:
+        print(f">>>>> [MAIN] Error parseando personality_scales, usando [].")
+
+    # Mantener compatibilidad: campos planos + objeto meta opcional
+    user_preferences = {
+        "game": game,
+        "coach_type": coach_type,
+        "personality": personality,
+        "elevenlabs_voice": elevenlabs_voice,
+        "tts_speed": tts_speed,
+        "personality_scales": scales_list,
+        # Estructura opcional anidada para futuras consultas sin romper compatibilidad
+        "personality_meta": {
+            "type": personality,
+            "scales": scales_list
+        }
+    }
+    
+    print(f">>>>> [MAIN] user_preferences completo: {user_preferences}")
 
     # Run the synchronous function in a separate thread
     result = await asyncio.to_thread(

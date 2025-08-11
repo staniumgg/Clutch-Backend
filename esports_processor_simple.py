@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 # Importar módulos de AWS
 try:
-    from dynamodb_config import save_analysis_complete
+    # from dynamodb_config import save_analysis_complete
     AWS_AVAILABLE = True
 except ImportError:
     AWS_AVAILABLE = False
@@ -412,7 +412,7 @@ def get_user_preference(user_id):
     sys.stderr.write("[PREFS] No se encontraron preferencias, usando defaults\n")
     return {}
 
-def process_audio_stream(user_id, username, timestamp):
+def process_audio_stream(user_id, username, timestamp, user_prefs):
     """Procesa un stream de audio desde stdin."""
     sys.stderr.write(f"[PROCESO] Procesando audio para {username} ({user_id})\n")
     
@@ -428,11 +428,9 @@ def process_audio_stream(user_id, username, timestamp):
     base_filename = f"{username}-{user_id}-{timestamp}.mp3"
 
     try:
-        # Obtener preferencias del usuario ANTES de la transcripción para obtener el juego
-        user_prefs = get_user_preference(user_id)
-        
+        # Las preferencias de usuario ahora se pasan como argumento
         if not user_prefs:
-            sys.stderr.write("[INFO] Usando preferencias por defecto\n")
+            sys.stderr.write("[INFO] No se recibieron preferencias, usando por defecto\n")
             analysis_prefs = {
                 "game": "Call of Duty", "coach_type": "Directo", "aspect": "Comunicacion",
                 "personality": "Introvertido", "experience": "Casual", "goal": "Mejorar"
@@ -462,22 +460,22 @@ def process_audio_stream(user_id, username, timestamp):
         # Guardar en AWS (si está disponible) - guardar el análisis original completo
         if AWS_AVAILABLE:
             sys.stderr.write("[AWS] Guardando análisis y subiendo audio a S3...\n")
-            save_analysis_complete(
-                user_id=user_id,
-                analysis_text=analysis_content,  # Guardar análisis original en AWS
-                player_audio_data=audio_data,  # Audio del jugador
-                coach_audio_data=None,         # No hay audio del coach en este contexto
-                base_filename=base_filename,
-                transcription=transcribed_text,
-                user_preferences=analysis_prefs,
-                wpm=wpm,  # Añadir WPM al guardado
-                wmp_by_segment=wpm_by_segment # Añadir WPM por segmento
-            )
+            # save_analysis_complete(
+            #     user_id=user_id,
+            #     analysis_text=analysis_content,  # Guardar análisis original en AWS
+            #     player_audio_data=audio_data,  # Audio del jugador
+            #     coach_audio_data=None,         # No hay audio del coach en este contexto
+            #     base_filename=base_filename,
+            #     transcription=transcribed_text,
+            #     user_preferences=analysis_prefs,
+            #     wpm=wpm,  # Añadir WPM al guardado
+            #     wmp_by_segment=wpm_by_segment # Añadir WPM por segmento
+            # )
         else:
-            sys.stderr.write("[INFO] Módulos de AWS no disponibles. Omitiendo guardado en la nube.\n")
-        
-        # Retornar resultado para index.js - incluir ambos análisis
-        return {
+            sys.stderr.write("[AWS] Módulos de AWS no disponibles. Omitiendo guardado.\n")
+
+        # Preparar la salida JSON para Node.js
+        output_data = {
             "success": True,
             "analysis": analysis_content,          # Análisis original completo
             "structured_analysis": structured_analysis,  # Análisis estructurado
@@ -486,30 +484,41 @@ def process_audio_stream(user_id, username, timestamp):
             "wpm_by_segment": wpm_by_segment # Añadir WPM por segmento a la respuesta
         }
         
+        return output_data
+        
     except Exception as e:
         sys.stderr.write(f"[ERROR] Error fatal en el procesamiento de audio: {e}\n")
         return {"error": str(e)}
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 4:
-            sys.stderr.write(f"[ERROR] Argumentos incorrectos. Recibidos: {len(sys.argv)-1}, esperados: 3\n")
+        if len(sys.argv) != 5:
+            sys.stderr.write(f"[ERROR] Argumentos incorrectos. Recibidos: {len(sys.argv)-1}, esperados: 4\n")
             sys.stderr.write(f"[ERROR] Argumentos recibidos: {sys.argv[1:] if len(sys.argv) > 1 else 'ninguno'}\n")
-            sys.stderr.write("Uso: <stdin> | python esports_processor_simple.py <user_id> <username> <timestamp>\n")
+            sys.stderr.write("Uso: <stdin> | python esports_processor_simple.py <user_id> <username> <timestamp> <user_preferences_json>\n")
             sys.exit(1)
         
         user_id_arg = sys.argv[1]
         username_arg = sys.argv[2]
         timestamp_arg = sys.argv[3]
+        user_prefs_json = sys.argv[4]
         
+        try:
+            user_prefs_arg = json.loads(user_prefs_json)
+        except json.JSONDecodeError:
+            sys.stderr.write("[ERROR] No se pudo decodificar el JSON de preferencias de usuario.\n")
+            user_prefs_arg = {}
+
         sys.stderr.write(f"[ARGS] Procesando: user_id={user_id_arg}, username={username_arg}, timestamp={timestamp_arg}\n")
+        sys.stderr.write(f"[PREFS] Preferencias recibidas: {user_prefs_arg}\n")
         
-        result = process_audio_stream(user_id_arg, username_arg, timestamp_arg)
+        result = process_audio_stream(user_id_arg, username_arg, timestamp_arg, user_prefs_arg)
         
         # Imprimir resultado como JSON a stdout para que Node.js lo capture con UTF-8 correcto
-        output_json = json.dumps(result, ensure_ascii=False, indent=None)
-        sys.stdout.buffer.write(output_json.encode('utf-8'))
-        sys.stdout.buffer.flush()
+        if result:
+            output_json = json.dumps(result, ensure_ascii=False, indent=None)
+            sys.stdout.buffer.write(output_json.encode('utf-8'))
+            sys.stdout.buffer.flush()
         
     except Exception as e:
         sys.stderr.write(f"[ERROR] Error fatal en main: {e}\n")
