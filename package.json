@@ -1,0 +1,23 @@
+{
+  "name": "clutch-backend",
+  "version": "1.0.0",
+  "main": "clutch.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@discordjs/voice": "^0.18.0",
+    "@elevenlabs/elevenlabs-js": "^2.8.0",
+    "aws-sdk": "^2.1692.0",
+    "discord.js": "^14.21.0",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "prism-media": "^1.3.5",
+    "python-shell": "^5.0.0"
+  }
+}
