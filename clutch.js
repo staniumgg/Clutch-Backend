@@ -12,8 +12,6 @@ const { ElevenLabsClient } = require('@elevenlabs/elevenlabs-js');
 const { PythonShell } = require('python-shell');
 
 // Set ffmpeg path
-ffmpeg.setFfmpegPath("C:\\Users\\paula\\OneDrive\\Documentos\\StaniuM\\ffmpeg-2025-05-15-git-12b853530a-full_build\\bin\\ffmpeg.exe");
-
 require('opusscript');
 
 // Ensure directories exist
@@ -386,7 +384,7 @@ async function spawnPythonAndAnalyze(audioBuffer, username, userId, timestamp, u
 // Función para obtener preferencias del usuario desde DynamoDB
 async function getUserPreferencesFromDB(userId) {
     return new Promise((resolve) => {
-        const pythonProcess = spawn('python', [
+        const pythonProcess = spawn('python3', [
             'preferences_manager.py', 'get', userId
         ], { stdio: ['pipe', 'pipe', 'pipe'] });
 
@@ -420,7 +418,7 @@ async function getUserPreferencesFromDB(userId) {
 // Función para guardar preferencias del usuario en DynamoDB
 async function saveUserPreferencesToDB(userId, tts_preferences, user_personality_test, profile_id) {
     return new Promise((resolve) => {
-        const pythonProcess = spawn('python', [
+        const pythonProcess = spawn('python3', [
             'preferences_manager.py', 'save', userId,
             JSON.stringify(tts_preferences),
             JSON.stringify(user_personality_test),
