@@ -335,7 +335,7 @@ async function convertPcmToMp3(pcmBuffer) {
 
 async function spawnPythonAndAnalyze(audioBuffer, username, userId, timestamp, userPreferences) {
     return new Promise((resolve, reject) => {
-        const pythonProcess = spawn('python', [
+        const pythonProcess = spawn('python3', [
             './esports_processor_simple.py',
             userId,
             username,
