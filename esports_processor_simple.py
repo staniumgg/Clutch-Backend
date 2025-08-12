@@ -235,47 +235,148 @@ def transcribe_with_gpt4o_transcribe_from_bytes(audio_data, filename, game_name=
         sys.stderr.write("[FALLBACK] Intentando con Whisper como respaldo...\n")
         return transcribe_with_whisper_from_bytes(audio_data, filename)
 
+def parse_profile_id(profile_id):
+    """
+    Parsea un profile_id y devuelve un diccionario con los rasgos Big Five.
+    Ejemplo: "E_alto__A_medio__N_bajo__C_alto__O_medio" 
+    """
+    if not profile_id:
+        return {
+            'extraversion': 'medio',
+            'agreeableness': 'medio', 
+            'neuroticism': 'medio',
+            'conscientiousness': 'medio',
+            'openness': 'medio'
+        }
+    
+    try:
+        traits = profile_id.split('__')
+        trait_map = {
+            'E': 'extraversion',
+            'A': 'agreeableness', 
+            'N': 'neuroticism',
+            'C': 'conscientiousness',
+            'O': 'openness'
+        }
+        
+        result = {}
+        for trait in traits:
+            if '_' in trait:
+                letter, level = trait.split('_', 1)
+                if letter in trait_map:
+                    result[trait_map[letter]] = level
+        
+        # Asegurar que todos los rasgos estén presentes
+        for trait_name in trait_map.values():
+            if trait_name not in result:
+                result[trait_name] = 'medio'
+                
+        return result
+    except Exception as e:
+        sys.stderr.write(f"[ERROR] Error parseando profile_id {profile_id}: {e}\n")
+        return {
+            'extraversion': 'medio',
+            'agreeableness': 'medio', 
+            'neuroticism': 'medio',
+            'conscientiousness': 'medio',
+            'openness': 'medio'
+        }
+
+def build_personality_based_system_prompt(game, profile_id):
+    """
+    Construye un system prompt personalizado basado en el perfil Big Five del jugador.
+    """
+    traits = parse_profile_id(profile_id)
+    
+    # Mapeo de características de coaching según Big Five
+    coaching_style = {
+        'extraversion': {
+            'alto': 'directo, energético y conversacional. Usa un tono dinámico y proporciona feedback extenso',
+            'medio': 'equilibrado entre directo y pausado. Mantén un tono profesional',
+            'bajo': 'pausado, conciso y respetuoso. Evita sobrecargar con demasiada información'
+        },
+        'agreeableness': {
+            'alto': 'empático y constructivo. Enfócate en el crecimiento positivo y evita críticas duras',
+            'medio': 'balanceado entre apoyo y honestidad directa',
+            'bajo': 'directo y sin rodeos. Sé claro sobre los errores sin preocuparte por herir sentimientos'
+        },
+        'neuroticism': {
+            'alto': 'calmante y estabilizador. Evita generar más estrés o ansiedad',
+            'medio': 'neutral en cuanto a presión emocional',
+            'bajo': 'puedes ser más desafiante y directo, ya que maneja bien la presión'
+        },
+        'conscientiousness': {
+            'alto': 'estructurado y detallado. Proporciona pasos específicos y organizados',
+            'medio': 'moderadamente estructurado',
+            'bajo': 'flexible y adaptable. Evita demasiados detalles o reglas rígidas'
+        },
+        'openness': {
+            'alto': 'innovador y creativo. Sugiere nuevas estrategias y enfoques alternativos',
+            'medio': 'balance entre métodos probados e innovación',
+            'bajo': 'conservador y tradicional. Enfócate en métodos probados y confiables'
+        }
+    }
+    
+    # Construir el prompt personalizado
+    style_extraversion = coaching_style['extraversion'][traits['extraversion']]
+    style_agreeableness = coaching_style['agreeableness'][traits['agreeableness']]
+    style_neuroticism = coaching_style['neuroticism'][traits['neuroticism']]
+    style_conscientiousness = coaching_style['conscientiousness'][traits['conscientiousness']]
+    style_openness = coaching_style['openness'][traits['openness']]
+    
+    system_prompt = f"""Eres un coach profesional de eSports especializado en {game}, con expertise en análisis de comunicación en tiempo real.
+
+PERFIL DE PERSONALIDAD DEL JUGADOR (Big Five):
+- Extraversión: {traits['extraversion']} 
+- Amabilidad: {traits['agreeableness']}
+- Estabilidad Emocional: {traits['neuroticism']}
+- Conciencia: {traits['conscientiousness']}
+- Apertura: {traits['openness']}
+
+ESTILO DE COACHING PERSONALIZADO:
+- Comunicación: {style_extraversion}
+- Enfoque emocional: {style_agreeableness}
+- Manejo de presión: {style_neuroticism}
+- Estructura del feedback: {style_conscientiousness}
+- Sugerencias estratégicas: {style_openness}
+
+Tu análisis debe adaptarse completamente a este perfil de personalidad, asegurando que el feedback sea óptimamente recibido y procesado por este jugador específico."""
+
+    sys.stderr.write(f"[PERSONALITY] Perfil aplicado: E-{traits['extraversion']}, A-{traits['agreeableness']}, N-{traits['neuroticism']}, C-{traits['conscientiousness']}, O-{traits['openness']}\n")
+    
+    return system_prompt
+
 def analyze_text(text, segments, user_id, analysis_prefs):
-    """Analiza texto transcrito usando GPT."""
+    """Analiza texto transcrito usando GPT con personalización basada en Big Five."""
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {OPENAI_API_KEY}"
     }
     
-    # Obtener todas las preferencias del usuario con valores por defecto
-    game = analysis_prefs.get("game", "un juego específico")
-    coach_type = analysis_prefs.get("coach_type", "un coach directo")
-    aspect = analysis_prefs.get("aspect", "la comunicación")
-    personality = analysis_prefs.get("personality", "un jugador introvertido")
-    experience = analysis_prefs.get("experience", "un jugador casual")
-    goal = analysis_prefs.get("goal", "mejorar en general")
-
-    # Construcción del prompt dinámico
-    system_prompt = f"""
-Eres un coach de eSports profesional para el juego {game}. Tu especialidad es analizar la comunicación de los jugadores.
-Tu estilo de coaching es {coach_type}. Te enfocas principalmente en el aspecto de {aspect}.
-El jugador al que te diriges tiene una personalidad de tipo {personality}, un nivel de experiencia {experience} y su objetivo principal es {goal}.
-Tu feedback debe ser altamente personalizado, adaptándose a todas estas características para que sea lo más útil y relevante posible para el jugador.
-"""
+    # Obtener preferencias del usuario
+    game = analysis_prefs.get("game", "Call of Duty")
+    profile_id = analysis_prefs.get("profile_id", "")
+      # Construcción del prompt dinámico basado en Big Five
+    system_prompt = build_personality_based_system_prompt(game, profile_id)
 
     user_prompt = f"""
-Analiza la siguiente transcripción de la comunicación de un jugador durante una partida.
+Analiza la siguiente transcripción de comunicación durante una partida de {game}.
 
 TRANSCRIPCIÓN:
 {text}
 
 INSTRUCCIONES CRÍTICAS PARA TU RESPUESTA:
-1.  **Formato de Salida**: Tu respuesta DEBE ser un texto plano, conversacional y fluido.
-2.  **SIN MARKDOWN**: No uses NUNCA formato markdown. No incluyas asteriscos (`*`), negritas (`**`), guiones (`-`), ni ningún tipo de lista. La salida tiene que ser limpia para ser convertida a audio (TTS).
-3.  **Tono**: Habla directamente al jugador de forma natural y constructiva.
-4.  **Extensión**: Sé conciso. Limita tu respuesta a un máximo de 100 tokens.
-5.  **Enfoque**: Céntrate en el aspecto principal a mejorar que es la {aspect}, considerando el resto de preferencias del jugador.
+1. **Formato de Salida**: Tu respuesta DEBE ser un texto plano, conversacional y fluido.
+2. **SIN MARKDOWN**: No uses NUNCA formato markdown. No incluyas asteriscos (*), negritas (**), guiones (-), ni ningún tipo de lista. La salida tiene que ser limpia para ser convertida a audio (TTS).
+3. **Personalización**: Adapta completamente tu tono, estructura y enfoque al perfil de personalidad especificado en el system prompt.
+4. **Extensión**: Sé conciso. Limita tu respuesta a un máximo de 100 tokens.
+5. **Enfoque**: Céntrate en la comunicación durante el juego, considerando el perfil de personalidad del jugador.
 
-EJEMPLO DE RESPUESTA IDEAL (recuerda, es solo un ejemplo de formato):
+EJEMPLO DE RESPUESTA IDEAL (adapta el tono según la personalidad):
 "Hola, he revisado tu partida. En general, tu comunicación es buena, pero intenta ser más rápido con los callouts de enemigos en el punto B. Un aviso a tiempo puede cambiar el resultado de la ronda. Sigue así, vas por buen camino."
 
-Ahora, analiza la transcripción y genera tu feedback personalizado.
+Ahora, analiza la transcripción y genera tu feedback personalizado según el perfil de personalidad.
 """
 
     data = {
@@ -427,16 +528,18 @@ def process_audio_stream(user_id, username, timestamp, user_prefs):
     # Generar nombre de archivo base
     base_filename = f"{username}-{user_id}-{timestamp}.mp3"
 
-    try:
-        # Las preferencias de usuario ahora se pasan como argumento
+    try:        # Las preferencias de usuario ahora se pasan como argumento
         if not user_prefs:
             sys.stderr.write("[INFO] No se recibieron preferencias, usando por defecto\n")
             analysis_prefs = {
-                "game": "Call of Duty", "coach_type": "Directo", "aspect": "Comunicacion",
-                "personality": "Introvertido", "experience": "Casual", "goal": "Mejorar"
+                "game": "Call of Duty",
+                "profile_id": "E_medio__A_medio__N_medio__C_medio__O_medio"  # Perfil neutral por defecto
             }
         else:
             analysis_prefs = user_prefs
+            # Asegurar que existe profile_id, usar perfil neutral si no está presente
+            if "profile_id" not in analysis_prefs:
+                analysis_prefs["profile_id"] = "E_medio__A_medio__N_medio__C_medio__O_medio"
         
         # Obtener nombre del juego para la transcripción contextual
         game_name = analysis_prefs.get("game", "Call of Duty")

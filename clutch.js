@@ -496,9 +496,12 @@ async function collectUserPreferences(userId, message) {
         const user = await client.users.fetch(userId);
         const dmChannel = await user.createDM();
 
-        // Primero verificar si el usuario ya tiene preferencias guardadas
+        // Verificar si el usuario ya tiene preferencias guardadas
         const existingPreferences = await getUserPreferencesFromDB(userId);
-        
+        let tts_preferences = {};
+        let user_personality_test = [];
+        let profile_id = '';
+
         if (existingPreferences.success) {
             // Usuario tiene preferencias previas, preguntar si quiere usarlas
             const useExistingRow = new ActionRowBuilder()
@@ -518,20 +521,15 @@ async function collectUserPreferences(userId, message) {
                 title: '🎮 Preferencias Encontradas',
                 description: '¡Encontré tus preferencias anteriores! ¿Quieres usarlas?',
                 fields: [
-                    { 
-                        name: 'Voz ElevenLabs', 
-                        value: existingPreferences.preferences.tts_preferences.elevenlabs_voice || 'No configurada', 
-                        inline: true 
+                    {
+                        name: 'Voz Coach',
+                        value: elevenLabsVoiceLabels[existingPreferences.preferences.tts_preferences.elevenlabs_voice] || existingPreferences.preferences.tts_preferences.elevenlabs_voice,
+                        inline: true
                     },
-                    { 
-                        name: 'Velocidad TTS', 
-                        value: existingPreferences.preferences.tts_preferences.tts_speed || 'No configurada', 
-                        inline: true 
-                    },
-                    { 
-                        name: 'Perfil de personalidad', 
-                        value: existingPreferences.preferences.profile_id || 'No configurado', 
-                        inline: false 
+                    {
+                        name: 'Velocidad Audio',
+                        value: existingPreferences.preferences.tts_speed || 'No configurada',
+                        inline: true
                     }
                 ]
             };
@@ -555,7 +553,6 @@ async function collectUserPreferences(userId, message) {
                         description: '¡Perfecto! Usaré tus preferencias guardadas para personalizar tu análisis.'
                     }]
                 });
-                
                 console.log(`🔄 Usuario ${userId} usará preferencias existentes`);
                 return existingPreferences.preferences;
             } else {
@@ -563,89 +560,13 @@ async function collectUserPreferences(userId, message) {
                 await dmChannel.send({
                     embeds: [{
                         color: 0xffaa00,
-                        title: '🆕 Configurando Nuevas Preferencias',
-                        description: 'Configuremos tus nuevas preferencias paso a paso.'
+                        title: '🆕 Configurando Voz Coach y Velocidad Audio',
+                        description: 'Puedes cambiar la voz coach y la velocidad del audio. Tu perfil de personalidad se mantendrá.'
                     }]
                 });
-            }
-        }
-
-        // --- Personality/Scale Questions ---
-        const personalityQuestions = [
-            'Me resulta fácil iniciar conversaciones con personas que no conozco.',
-            'Prefiero escuchar antes que hablar en la mayoría de las situaciones.',
-            'Me esfuerzo por ser amable y considerado, incluso en desacuerdos.',
-            'Cuando algo no sale como quiero, tiendo a reaccionar de forma brusca o directa.',
-            'Me mantengo calmado y enfocado en situaciones de presión.',
-            'Me pongo nervioso o frustrado con facilidad cuando hay tensión.',
-            'Me gusta planificar y organizar antes de actuar.',
-            'A menudo actúo de manera improvisada y sin plan previo.',
-            'Disfruto probar ideas o formas nuevas de hacer las cosas.',
-            'Prefiero seguir los métodos que ya conozco en lugar de cambiar.'
-        ];
-
-        // Solo recolectar TTS y personality test
-        const tts_preferences = {};
-        const user_personality_test = [];
-
-        // Ask personality questions one by one with buttons
-        for (let i = 0; i < personalityQuestions.length; i++) {
-            let answered = false;
-            let selectedNum = null;
-            while (!answered) {
-                const buttonRow = new ActionRowBuilder()
-                    .addComponents(
-                        [1,2,3,4,5].map(num =>
-                            new ButtonBuilder()
-                                .setCustomId(`personality_scale_${i}_${num}`)
-                                .setLabel(`${num}`)
-                                .setStyle(selectedNum === num ? 'Primary' : 'Secondary')
-                                .setDisabled(answered)
-                        )
-                    );
-
-                let sentMsg;
-                if (!answered) {
-                    sentMsg = await dmChannel.send({
-                        content: `Pregunta ${i + 1}/10:\n${personalityQuestions[i]}`,
-                        components: [buttonRow]
-                    });
-                } else {
-                    await sentMsg.edit({
-                        content: `Pregunta ${i + 1}/10:\n${personalityQuestions[i]}`,
-                        components: [buttonRow]
-                    });
-                }
-
-                const selection = await dmChannel.awaitMessageComponent({
-                    componentType: ComponentType.Button,
-                    time: 120000
-                }).catch(() => null);
-
-                if (selection && selection.customId) {
-                    selectedNum = parseInt(selection.customId.split('_')[3]);
-                    user_personality_test.push(selectedNum);
-                    answered = true;
-                    await selection.deferUpdate();
-                    // Editar el mensaje para mostrar el botón seleccionado en morado (Primary) y los demás en gris
-                    const buttonRowFinal = new ActionRowBuilder()
-                        .addComponents(
-                            [1,2,3,4,5].map(num =>
-                                new ButtonBuilder()
-                                    .setCustomId(`personality_scale_${i}_${num}`)
-                                    .setLabel(`${num}`)
-                                    .setStyle(num === selectedNum ? 'Primary' : 'Secondary')
-                                    .setDisabled(true)
-                            )
-                        );
-                    await sentMsg.edit({
-                        content: `Pregunta ${i + 1}/10:\n${personalityQuestions[i]}`,
-                        components: [buttonRowFinal]
-                    });
-                } else {
-                    user_personality_test.push(3); // Valor neutro si no responde
-                    answered = true;
-                }
+                // Usar el test de personalidad anterior si existe
+                user_personality_test = existingPreferences.preferences.user_personality_test || [3,3,3,3,3,3,3,3,3,3];
+                profile_id = existingPreferences.preferences.profile_id || calculateProfileId(user_personality_test);
             }
         }
 
@@ -660,32 +581,20 @@ async function collectUserPreferences(userId, message) {
                         { label: 'Historiador Antiguo', value: '5egO01tkUjEzu7xSSE8M', description: 'Voz masculina sabia y experimentada' },
                         { label: 'Coach Chileno', value: '0cheeVA5B3Cv6DGq65cT', description: 'Voz masculina latina y amigable' },
                         { label: 'Coach Villana', value: 'flHkNRp1BlvT73UL6gyz', description: 'Voz tranquila y relajante' },
-                        { label: 'Sargento WWII', value: 'DGzg6RaUqxGRTHSBjfgF', description: 'Voz autoritaria y militar' }
+                        { label: 'Sargento WWII', value: 'DGzg6RaUqxGRTHSBjfgF', description: 'Voz autoritaria y militar' },
+                        { label: 'Coach Default', value: 'gU0LNdkMOQCOrPrwtbee', description: 'Voz por defecto' }
                     ])
             );
 
-        const preferencesEmbed = {
-            color: 0x0099ff,
-            title: '🎮 Configuración de Preferencias de Audio (ElevenLabs)',
-            description: 'Solo necesito saber tu voz preferida y la velocidad del audio para personalizar tu análisis.',
-            fields: [
-                {
-                    name: '¿Qué configuraremos?',
-                    value: '• Voz de ElevenLabs\n• Velocidad del audio',
-                    inline: false
-                }
-            ],
-            footer: {
-                text: 'Esto solo toma 1 minuto y mejorará tu feedback con ElevenLabs.'
-            }
-        };
-
-        const preferencesMessage = await dmChannel.send({
-            embeds: [preferencesEmbed],
+        await dmChannel.send({
+            embeds: [{
+                color: 0x0099ff,
+                title: 'Selecciona la voz de tu Coach',
+                description: '¿Qué voz prefieres para tu análisis personalizado?'
+            }],
             components: [voiceRow]
         });
 
-        // Paso 2: Voz
         const voiceSelection = await dmChannel.awaitMessageComponent({
             componentType: ComponentType.StringSelect,
             time: 120000
@@ -699,7 +608,7 @@ async function collectUserPreferences(userId, message) {
             tts_preferences.elevenlabs_voice = 'gU0LNdkMOQCOrPrwtbee'; // Default
         }
 
-        // Paso 3: Velocidad
+        // Paso 2: Velocidad
         const speedRow = new ActionRowBuilder()
             .addComponents(
                 new StringSelectMenuBuilder()
@@ -732,40 +641,29 @@ async function collectUserPreferences(userId, message) {
             await speedSelection.deferUpdate();
         } else {
             tts_preferences.tts_speed = 'Normal'; // Default
-        }        // Calcular profile_id antes de guardar
-        const profile_id = calculateProfileId(user_personality_test);
-        console.log(`🧮 Profile ID calculado: ${profile_id}`);
+        }
 
-        // Guardar las nuevas preferencias en DynamoDB
-        console.log(`💾 Guardando preferencias para usuario ${userId}...`);
+        // Guardar las preferencias actualizadas (solo voz y velocidad, manteniendo personalidad)
         const saveResult = await saveUserPreferencesToDB(userId, tts_preferences, user_personality_test, profile_id);
-        
         if (saveResult.success) {
             console.log(`✅ Preferencias guardadas exitosamente para ${userId}`);
         } else {
             console.error(`❌ Error guardando preferencias para ${userId}:`, saveResult.error);
         }
 
-        // Confirmación final
         await dmChannel.send({
             embeds: [{
                 color: 0x00ff00,
                 title: '✅ Preferencias Configuradas',
                 description: '¡Tus preferencias han sido guardadas! Tu análisis será personalizado con ElevenLabs TTS.',
                 fields: [
-                    { name: 'Voz ElevenLabs', value: tts_preferences.elevenlabs_voice, inline: true },
-                    { name: 'Velocidad TTS', value: tts_preferences.tts_speed, inline: true },
-                    { name: 'Perfil de personalidad', value: profile_id, inline: false },
-                    { name: 'Respuestas de personalidad', value: user_personality_test.join(', '), inline: false }
+                    { name: 'Voz Coach', value: elevenLabsVoiceLabels[tts_preferences.elevenlabs_voice] || tts_preferences.elevenlabs_voice, inline: true },
+                    { name: 'Velocidad Audio', value: tts_preferences.tts_speed, inline: true }
                 ]
             }],
             components: []
         });
 
-        // Debug: log collected preferences before returning
-        console.log(`🐛 DEBUG: Preferencias finales recolectadas:`, JSON.stringify({ tts_preferences, user_personality_test, profile_id }, null, 2));
-        console.log(`🧪 DEBUG: user_personality_test array:`, user_personality_test);
-        
         return { tts_preferences, user_personality_test, profile_id };
     } catch (error) {
         console.error(`❌ Error recolectando preferencias para ${userId}:`, error);
@@ -794,25 +692,40 @@ async function sendFeedbackToUser(userId, analysis, userPreferences = null, tran
         const elevenLabsVoice = userPreferences?.elevenlabs_voice || 'gU0LNdkMOQCOrPrwtbee';
         const ttsSpeed = userPreferences?.tts_speed || 'Normal';
 
-        console.log(`🔊 Generando TTS con ElevenLabs para ${user.username}`);
-        console.log(`🎤 Voz: ${elevenLabsVoice}, Velocidad: ${ttsSpeed}`);
+        // Fecha de análisis en formato DD/MM/YYYY - HH:mm
+        const now = new Date();
+        const fechaAnalisis = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth()+1).toString().padStart(2, '0')}/${now.getFullYear()} - ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
 
         // 1. Enviar análisis estructurado (si está disponible)
-        if (structuredAnalysis && structuredAnalysis.trim()) {
-            const structuredMessage = `**Resumen Estructurado de tu Análisis**\n\n${structuredAnalysis}`;
-            await dmChannel.send(structuredMessage);
-            console.log(`✅ Análisis estructurado enviado a ${user.username}`);
-        }
+        // OMITIR envío de mensaje escrito al jugador
+        // if (structuredAnalysis && structuredAnalysis.trim()) {
+        //     const structuredMessage = `**Resumen Estructurado de tu Análisis**\n\n${structuredAnalysis}`;
+        //     await dmChannel.send(structuredMessage);
+        // }
 
-        // 2. Enviar análisis completo como texto
-        const textMessage = `🎮 **Tu Análisis Completo de Clutch**\n\n${analysis}\n\n🎧 **También tienes este análisis en audio:**`;
-        await dmChannel.send(textMessage);
+        // 2. Generar y enviar PDF del análisis
+        let pdfBuffer;
+        try {
+            pdfBuffer = await generateAnalysisPDF(analysis, structuredAnalysis, user.username, userId, fechaAnalisis);
+            if (pdfBuffer) {
+                await dmChannel.send({
+                    files: [{
+                        attachment: pdfBuffer,
+                        name: `Análisis_Clutch_${user.username}.pdf`
+                    }]
+                });
+                console.log(`✅ PDF generado y enviado correctamente para ${user.username}`);
+            } else {
+                console.error(`❌ PDF no generado para ${user.username}`);
+            }
+        } catch (err) {
+            console.error(`❌ Error generando o enviando PDF para ${user.username}:`, err);
+        }
 
         // 3. Generar TTS del análisis completo con ElevenLabs
         let ttsAudioBuffer;
         if (process.env.TESTING === 'true') {
-            // Generar un audio MP3 de 1 segundo de silencio para testing
-            const silentBuffer = Buffer.alloc(44100 * 2, 0); // 1 segundo, 44100Hz, 16-bit mono
+            const silentBuffer = Buffer.alloc(44100 * 2, 0);
             ttsAudioBuffer = silentBuffer;
         } else {
             ttsAudioBuffer = await generateTTSElevenLabs(analysis, elevenLabsVoice, ttsSpeed);
@@ -827,11 +740,7 @@ async function sendFeedbackToUser(userId, analysis, userPreferences = null, tran
         });
 
         // 5. Enviar a FastAPI SOLO aquí, con todas las preferencias
-        console.log(`🐛 DEBUG: Preferencias que se van a enviar a FastAPI:`, JSON.stringify(userPreferences, null, 2));
         await sendToFastAPI(userId, analysis, transcription, userPreferences, playerAudioBuffer, ttsAudioBuffer, user.username, timestamp);
-
-        console.log(`✅ Feedback completo con ElevenLabs enviado a ${user.username} (estructurado + texto + audio)`);
-
     } catch (error) {
         console.error(`❌ Error enviando feedback a ${userId}:`, error);
     }
@@ -1044,4 +953,65 @@ async function setupAudioStream(receiver, user, connection, retryCount = 0) {
         }
         return null;
     }
+}
+
+// Mapeo de IDs de ElevenLabs a nombres amigables
+const elevenLabsVoiceLabels = {
+    'pPdl9cQBQq4p6mRkZy2Z': 'Coach Tierna',
+    '5egO01tkUjEzu7xSSE8M': 'Historiador Antiguo',
+    '0cheeVA5B3Cv6DGq65cT': 'Coach Chileno',
+    'flHkNRp1BlvT73UL6gyz': 'Coach Villana',
+    'DGzg6RaUqxGRTHSBjfgF': 'Sargento WWII',
+    'gU0LNdkMOQCOrPrwtbee': 'Coach Default',
+    // Agrega aquí más voces si tienes
+};
+
+async function generateAnalysisPDF(analysis, structuredAnalysis, username, userId, fechaAnalisis) {
+    /**
+     * Genera un PDF del análisis usando el script Python pdf_generator.py
+     */
+    return new Promise((resolve) => {
+        try {
+            const { spawn } = require('child_process');
+            // Datos para enviar al script Python
+            const pdfData = {
+                analysis_text: analysis,
+                structured_analysis: structuredAnalysis || '',
+                username: username,
+                user_id: userId,
+                fecha_analisis: fechaAnalisis
+            };
+            const pythonProcess = spawn('python', ['pdf_generator.py'], {
+                stdio: ['pipe', 'pipe', 'pipe']
+            });
+            let pdfBuffer = Buffer.alloc(0);
+            let errorOutput = '';
+            pythonProcess.stdin.write(JSON.stringify(pdfData));
+            pythonProcess.stdin.end();
+            pythonProcess.stdout.on('data', (data) => {
+                pdfBuffer = Buffer.concat([pdfBuffer, data]);
+            });
+            pythonProcess.stderr.on('data', (data) => {
+                errorOutput += data.toString();
+            });
+            pythonProcess.on('close', (code) => {
+                console.log(`[PDF DEBUG] python exit code: ${code}`);
+                console.log(`[PDF DEBUG] stderr: ${errorOutput.trim()}`);
+                console.log(`[PDF DEBUG] pdfBuffer length: ${pdfBuffer.length}`);
+                if (code === 0 && pdfBuffer.length > 0) {
+                    resolve(pdfBuffer);
+                } else {
+                    console.error(`❌ Error generando PDF (código ${code}):`, errorOutput);
+                    resolve(null);
+                }
+            });
+            pythonProcess.on('error', (error) => {
+                console.error('[PDF DEBUG] Error ejecutando Python para PDF:', error);
+                resolve(null);
+            });
+        } catch (error) {
+            console.error('[PDF DEBUG] Error en generateAnalysisPDF:', error);
+            resolve(null);
+        }
+    });
 }
